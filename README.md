@@ -1,4 +1,4 @@
-# AI Development Agency Executor v0.2
+# AI Development Agency Executor v0.2.1 (Neon)
 
 Owner-controlled Vercel execution service for the EXE-012 no-AI handshake.
 
@@ -8,7 +8,7 @@ Owner-controlled Vercel execution service for the EXE-012 no-AI handshake.
 - `POST /api/runs`
 - `GET /api/runs/:runId`
 - `POST /api/events`
-- Supabase/PostgreSQL run, event, and outbox schema
+- Neon PostgreSQL run, event, and outbox schema
 - Strict idempotency and event sequencing
 - Detached Vercel Sandbox handshake worker
 - No AI calls
@@ -18,10 +18,10 @@ Owner-controlled Vercel execution service for the EXE-012 no-AI handshake.
 ```text
 Owner Site / test client
   -> POST /api/runs (202 + runId)
-  -> Supabase run record
+  -> Neon run record
   -> Vercel Sandbox starts independently
   -> Sandbox POSTs sequenced events to /api/events
-  -> Supabase updates run and creates two outbox records
+  -> Neon updates run and creates two outbox records
   -> GET /api/runs/:runId returns durable status
 ```
 
@@ -35,15 +35,18 @@ The Vercel Function only waits long enough to launch the detached Sandbox proces
 - Event sequence must be exactly current sequence + 1.
 - Terminal runs reject later events.
 - Browser clients never receive server secrets.
-- AI calls are disabled in v0.2.
+- AI calls are disabled in v0.2.1.
 
 ## Database
 
-Apply `migrations/001_executor_runtime.sql` to a dedicated Supabase project. Do not use the church or Bible application databases.
+1. Create a dedicated Neon Free project named `ai-dev-agency-runtime`.
+2. Copy its pooled connection string to the server-only `DATABASE_URL` variable.
+3. Apply `migrations/001_executor_runtime.sql` in the Neon SQL Editor.
+4. Do not use the church or Bible application databases.
 
 ## Required environment variables
 
-Copy `.env.example` and set all secret values in Vercel project settings.
+Copy `.env.example` and set all secret values in Vercel project settings. Never expose `DATABASE_URL` to browser code.
 
 ## Checks
 
