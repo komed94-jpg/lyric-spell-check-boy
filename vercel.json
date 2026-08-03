@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "app/api/runs/route.js": { "maxDuration": 60 },
+    "app/api/events/route.js": { "maxDuration": 30 }
+  }
+}
