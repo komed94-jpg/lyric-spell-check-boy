@@ -8,14 +8,14 @@ export async function GET() {
     config.requestToken &&
       config.eventToken &&
       config.publicUrl &&
-      config.supabaseUrl &&
-      config.supabaseServiceRoleKey,
+      config.databaseUrl,
   );
 
   return Response.json({
     ok: true,
     service: 'ai-dev-agency-executor',
-    version: '0.2.0',
+    version: '0.2.1',
+    database: 'neon-postgres',
     configured,
     mode: configured ? 'ready-for-handshake' : 'configuration-required',
     aiCallsEnabled: false,
