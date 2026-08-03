@@ -73,16 +73,13 @@ begin
   if p_task_id <> 'EXE-012' then
     raise exception 'Only EXE-012 is allowed';
   end if;
-
   select * into existing from public.executor_runs r where r.idempotency_key = p_idempotency_key;
   if found then
     return query select existing.id, existing.task_id, existing.status, true, existing.current_sequence, existing.created_at;
     return;
   end if;
-
   insert into public.executor_runs (id, task_id, idempotency_key, metadata, status)
   values (p_run_id, p_task_id, p_idempotency_key, coalesce(p_metadata, '{}'::jsonb), 'queued');
-
   return query
     select r.id, r.task_id, r.status, false, r.current_sequence, r.created_at
     from public.executor_runs r where r.id = p_run_id;
@@ -122,20 +119,15 @@ begin
     return query select existing_event.run_id, existing_event.event_id, existing_event.sequence, existing_event.status, true;
     return;
   end if;
-
   select * into locked_run from public.executor_runs r where r.id = p_run_id for update;
   if not found then raise exception 'Run not found'; end if;
-
   terminal := locked_run.status in ('completed','failed','cancelled');
   if terminal then raise exception 'Run is already terminal'; end if;
-
   if p_sequence <> locked_run.current_sequence + 1 then
     raise exception 'Out-of-order event: expected %, received %', locked_run.current_sequence + 1, p_sequence;
   end if;
-
   insert into public.executor_events (event_id, run_id, sequence, event_type, status, payload)
   values (p_event_id, p_run_id, p_sequence, p_event_type, p_status, coalesce(p_payload, '{}'::jsonb));
-
   update public.executor_runs
   set current_sequence = p_sequence,
       status = p_status,
@@ -143,13 +135,11 @@ begin
       completed_at = case when p_status in ('completed','failed','cancelled') then now() else completed_at end,
       updated_at = now()
   where id = p_run_id;
-
   insert into public.executor_outbox (run_id, event_id, destination, payload)
   values
     (p_run_id, p_event_id, 'google_sheets', jsonb_build_object('runId', p_run_id, 'eventId', p_event_id, 'sequence', p_sequence, 'status', p_status)),
     (p_run_id, p_event_id, 'owner_site', jsonb_build_object('runId', p_run_id, 'eventId', p_event_id, 'sequence', p_sequence, 'status', p_status))
   on conflict do nothing;
-
   return query select p_run_id, p_event_id, p_sequence, p_status, false;
 end;
 $$;
@@ -173,3 +163,10 @@ $$;
 revoke all on function public.executor_create_run(text,text,text,jsonb) from public;
 revoke all on function public.executor_append_event(text,text,integer,text,text,jsonb) from public;
 revoke all on function public.executor_mark_launch_failure(text,text) from public;
+
+grant select, insert, update, delete on public.executor_runs to service_role;
+grant select, insert, update, delete on public.executor_events to service_role;
+grant select, insert, update, delete on public.executor_outbox to service_role;
+grant execute on function public.executor_create_run(text,text,text,jsonb) to service_role;
+grant execute on function public.executor_append_event(text,text,integer,text,text,jsonb) to service_role;
+grant execute on function public.executor_mark_launch_failure(text,text) to service_role;
