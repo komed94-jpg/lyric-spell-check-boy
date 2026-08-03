@@ -41,13 +41,8 @@ create table if not exists public.executor_outbox (
   unique (event_id, destination)
 );
 
-alter table public.executor_runs enable row level security;
-alter table public.executor_events enable row level security;
-alter table public.executor_outbox enable row level security;
-
-revoke all on public.executor_runs from anon, authenticated;
-revoke all on public.executor_events from anon, authenticated;
-revoke all on public.executor_outbox from anon, authenticated;
+-- Neon is accessed only through the server-side DATABASE_URL.
+-- Do not expose DATABASE_URL to browser code or enable a public Data API for these tables.
 
 create or replace function public.executor_create_run(
   p_run_id text,
@@ -73,19 +68,28 @@ begin
   if p_task_id <> 'EXE-012' then
     raise exception 'Only EXE-012 is allowed';
   end if;
-  select * into existing from public.executor_runs r where r.idempotency_key = p_idempotency_key;
+
+  select * into existing
+  from public.executor_runs r
+  where r.idempotency_key = p_idempotency_key;
+
   if found then
     return query select existing.id, existing.task_id, existing.status, true, existing.current_sequence, existing.created_at;
     return;
   end if;
+
   insert into public.executor_runs (id, task_id, idempotency_key, metadata, status)
   values (p_run_id, p_task_id, p_idempotency_key, coalesce(p_metadata, '{}'::jsonb), 'queued');
+
   return query
     select r.id, r.task_id, r.status, false, r.current_sequence, r.created_at
-    from public.executor_runs r where r.id = p_run_id;
+    from public.executor_runs r
+    where r.id = p_run_id;
 exception
   when unique_violation then
-    select * into existing from public.executor_runs r where r.idempotency_key = p_idempotency_key;
+    select * into existing
+    from public.executor_runs r
+    where r.idempotency_key = p_idempotency_key;
     return query select existing.id, existing.task_id, existing.status, true, existing.current_sequence, existing.created_at;
 end;
 $$;
@@ -114,20 +118,36 @@ declare
   existing_event public.executor_events%rowtype;
   terminal boolean;
 begin
-  select * into existing_event from public.executor_events e where e.event_id = p_event_id;
+  select * into existing_event
+  from public.executor_events e
+  where e.event_id = p_event_id;
+
   if found then
     return query select existing_event.run_id, existing_event.event_id, existing_event.sequence, existing_event.status, true;
     return;
   end if;
-  select * into locked_run from public.executor_runs r where r.id = p_run_id for update;
-  if not found then raise exception 'Run not found'; end if;
+
+  select * into locked_run
+  from public.executor_runs r
+  where r.id = p_run_id
+  for update;
+
+  if not found then
+    raise exception 'Run not found';
+  end if;
+
   terminal := locked_run.status in ('completed','failed','cancelled');
-  if terminal then raise exception 'Run is already terminal'; end if;
+  if terminal then
+    raise exception 'Run is already terminal';
+  end if;
+
   if p_sequence <> locked_run.current_sequence + 1 then
     raise exception 'Out-of-order event: expected %, received %', locked_run.current_sequence + 1, p_sequence;
   end if;
+
   insert into public.executor_events (event_id, run_id, sequence, event_type, status, payload)
   values (p_event_id, p_run_id, p_sequence, p_event_type, p_status, coalesce(p_payload, '{}'::jsonb));
+
   update public.executor_runs
   set current_sequence = p_sequence,
       status = p_status,
@@ -135,11 +155,13 @@ begin
       completed_at = case when p_status in ('completed','failed','cancelled') then now() else completed_at end,
       updated_at = now()
   where id = p_run_id;
+
   insert into public.executor_outbox (run_id, event_id, destination, payload)
   values
     (p_run_id, p_event_id, 'google_sheets', jsonb_build_object('runId', p_run_id, 'eventId', p_event_id, 'sequence', p_sequence, 'status', p_status)),
     (p_run_id, p_event_id, 'owner_site', jsonb_build_object('runId', p_run_id, 'eventId', p_event_id, 'sequence', p_sequence, 'status', p_status))
   on conflict do nothing;
+
   return query select p_run_id, p_event_id, p_sequence, p_status, false;
 end;
 $$;
@@ -155,18 +177,11 @@ set search_path = public
 as $$
 begin
   update public.executor_runs
-  set status = 'failed', last_error = left(p_message, 2000), completed_at = now(), updated_at = now()
-  where id = p_run_id and status not in ('completed','failed','cancelled');
+  set status = 'failed',
+      last_error = left(p_message, 2000),
+      completed_at = now(),
+      updated_at = now()
+  where id = p_run_id
+    and status not in ('completed','failed','cancelled');
 end;
 $$;
-
-revoke all on function public.executor_create_run(text,text,text,jsonb) from public;
-revoke all on function public.executor_append_event(text,text,integer,text,text,jsonb) from public;
-revoke all on function public.executor_mark_launch_failure(text,text) from public;
-
-grant select, insert, update, delete on public.executor_runs to service_role;
-grant select, insert, update, delete on public.executor_events to service_role;
-grant select, insert, update, delete on public.executor_outbox to service_role;
-grant execute on function public.executor_create_run(text,text,text,jsonb) to service_role;
-grant execute on function public.executor_append_event(text,text,integer,text,text,jsonb) to service_role;
-grant execute on function public.executor_mark_launch_failure(text,text) to service_role;
